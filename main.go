@@ -5,10 +5,12 @@ import (
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
+	"golang.org/x/crypto/bcrypt"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/context"
@@ -20,12 +22,51 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	tpl.ExecuteTemplate(w, "index.html", nil)
 }
 
-func registerHandler(w http.ResponseWriter, r *http.Request) {
-	tpl.ExecuteTemplate(w, "register.html", nil)
-}
-
 func loginHandler(w http.ResponseWriter, r *http.Request) {
-	tpl.ExecuteTemplate(w, "login.html", nil)
+	if r.Method == "POST" {
+		db := dbConn()
+		email := r.FormValue("email")
+		password := r.FormValue("password")
+		fmt.Printf("%s, %s\n", email, password)
+
+		if strings.Trim(email, " ") == "" || strings.Trim(password, " ") == "" {
+			fmt.Println("Parameter's can't be empty")
+			http.Redirect(w, r, "/login", http.StatusMovedPermanently)
+			return
+		}
+
+		checkUser, err := db.Query("SELECT id, createdDate, password, firstname, lastname, email FROM user WHERE email=?", email)
+		if err != nil {
+			panic(err.Error())
+		}
+		user := &User{}
+		for checkUser.Next() {
+			var id int
+			var password, firstName, lastName, email string
+			var createdDate time.Time
+			err = checkUser.Scan(&id, &createdDate, &password, &firstName, &lastName, &email)
+			if err != nil {
+				panic(err.Error())
+			}
+			user.ID = id
+			user.FirstName = firstName
+			user.LastName = lastName
+			user.Email = email
+			user.Password = password
+			user.CreatedDate = createdDate
+		}
+
+		errf := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+		if errf != nil && errf == bcrypt.ErrMismatchedHashAndPassword { //Password does not match!
+			fmt.Println(errf)
+			http.Redirect(w, r, "/login", http.StatusMovedPermanently)
+		} else {
+			tpl.ExecuteTemplate(w, "dashboard.html", user)
+			return
+		}
+	} else if r.Method == "GET" {
+		tpl.ExecuteTemplate(w, "login.html", nil)
+	}
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +102,46 @@ type User struct {
 	Email       string    `json:"email"`
 	Password    string    `json:"password"`
 	CreatedDate time.Time `json:"createdDate"`
+}
+
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		db := dbConn()
+		firstName := r.FormValue("FirstName")
+		lastName := r.FormValue("LastName")
+		email := r.FormValue("email")
+		fmt.Printf("%s, %s, %s\n", firstName, lastName, email)
+
+		password, err := bcrypt.GenerateFromPassword([]byte(r.FormValue("password")), bcrypt.DefaultCost)
+		if err != nil {
+			fmt.Println(err)
+			tpl.ExecuteTemplate(w, "Register", err)
+		}
+
+		dt := time.Now()
+
+		createdDateString := dt.Format("2006-01-02 15:04:05")
+
+		// Convert the time before inserting into the database
+		createdDate, err := time.Parse("2006-01-02 15:04:05", createdDateString)
+		if err != nil {
+			log.Fatal("Error converting the time:", err)
+		}
+		if err != nil {
+			log.Fatal("Error converting the time:", err)
+		}
+
+		_, err = db.Exec("INSERT INTO user(firstname, lastname,email,password,createdDate) VALUES(?,?,?,?,?)", firstName, lastName, email, password, createdDate)
+		if err != nil {
+			fmt.Println("Error when inserting: ", err.Error())
+			panic(err.Error())
+		}
+		log.Println("=> Inserted: First Name: " + firstName + " | Last Name: " + lastName)
+
+		http.Redirect(w, r, "/login", http.StatusMovedPermanently)
+	} else if r.Method == "GET" {
+		tpl.ExecuteTemplate(w, "register.html", nil)
+	}
 }
 
 func main() {
